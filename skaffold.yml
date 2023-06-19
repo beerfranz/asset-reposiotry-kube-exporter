@@ -1,0 +1,20 @@
+apiVersion: skaffold/v4beta4
+kind: Config
+metadata:
+  name: asset-repository-kube-exporter
+build:
+  artifacts:
+    - image: asset-repository-kube-exporter
+
+deploy:
+  kubeContext: minikube
+  helm:
+    releases:
+    - name: asset-repository
+      chartPath: ../asset-repository-helm/helm/asset-repository
+      namespace: default
+      setValueTemplates:
+        kube-exporter.image.repository: "{{.IMAGE_REPO_asset_repository_kube_exporter}}"
+        kube-exporter.image.tag: "{{.IMAGE_TAG_asset_repository_kube_exporter}}@{{.IMAGE_DIGEST_asset_repository_kube_exporter}}"
+      valuesFiles:
+        - skaffold-values.yaml

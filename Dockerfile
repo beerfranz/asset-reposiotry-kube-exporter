@@ -8,6 +8,8 @@ COPY ./src/script.py .
 
 ENV ASSET_REPOSITORY_URL=http://asset-repository-caddy
 ENV SOURCE_IDENTIFIER=kube-exporter
-ENV LABEL_SELECTOR="asset-repository/export=${SOURCE_IDENTIFIER}"
+# ENV LABEL_SELECTOR="asset-repository/export=${SOURCE_IDENTIFIER}"
+ENV LABEL_SELECTOR=""
+ENV SLEEP=2
 
 ENTRYPOINT [ "python", "script.py"  ]

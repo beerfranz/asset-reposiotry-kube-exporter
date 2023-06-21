@@ -13,64 +13,77 @@ config.load_incluster_config()
 
 v1 = client.CoreV1Api()
 
+KUBE_LABEL_SELECTOR = os.environ["LABEL_SELECTOR"]
+KUBE_ANNOTATION_ASSET_IDENTIFIER = "asset-repository/asset.identifier"
+KUBE_ANNOTATION_VERSION = "asset-repository/version"
+KUBE_ANNOTATION_CONTAINERS = "asset-repository/container-instances"
+
+
+def extractContainerInfos(container, baseIdentifier, commonAttributes, annotations):
+    info = dict()
+
+    image = container.image
+    imageVersion = image.split(':')
+    if imageVersion[1]:
+        info["version"] = imageVersion[1]
+    else:
+        info["version"] = image
+
+    info["name"] = container.name
+    info["identifier"] = baseIdentifier + "-" + container.name
+    info["attributes"] = commonAttributes
+
+    container_asset_identifier = KUBE_ANNOTATION_ASSET_IDENTIFIER + "." + container.name
+
+    # Asset: use annotation container-specific
+    if container_asset_identifier in annotations:
+        info["asset"] = dict()
+        info["asset"]["identifier"] = annotations[container_asset_identifier]
+    elif KUBE_ANNOTATION_ASSET_IDENTIFIER in annotations:
+        info["asset"] = dict()
+        info["asset"]["identifier"] = annotations[KUBE_ANNOTATION_ASSET_IDENTIFIER]
+
+    return info
+
+
 def kube():
     instances = []
-    pods = v1.list_pod_for_all_namespaces(watch=False, label_selector=os.environ["LABEL_SELECTOR"])
+
+    pods = v1.list_pod_for_all_namespaces(watch=False, label_selector=KUBE_LABEL_SELECTOR)
+
     for pod in pods.items:
         namespace = pod.metadata.namespace
         nodeName = pod.spec.node_name
         podName = pod.metadata.name
         annotations = pod.metadata.annotations
 
-        if "asset-repository/version" in annotations:
-            instance = dict()
-            instance["identifier"] = namespace + "-" + podName
-            instance["version"] = annotations["asset-repository/version"]
-            instance["attributes"] = dict()
-            instance["attributes"]["namespace"] = namespace
-            instance["attributes"]["pod"] = podName
-            instance["attributes"]["node"] = nodeName
+        commonAttributes = dict()
+        commonAttributes["pod"] = podName
+        commonAttributes["node"] = nodeName
+        commonAttributes["namespace"] = namespace
 
-            if "asset-repository/asset.identifier" in annotations:
-                instance["asset"] = dict()
-                instance["asset"]["identifier"] = annotations["asset-repository/asset.identifier"]
+        baseIdentifier = namespace + "-" + podName
 
-            instances.append(instance)
-        
-        if "asset-repository/container-instances" in annotations:
-            trackedContainerName = annotations["asset-repository/container-instances"].split(",")
+        if not annotations:
+            annotations = dict()
+
+        # If containers to check are identified in annotations
+        if KUBE_ANNOTATION_CONTAINERS in annotations:
+            trackedContainerName = annotations[KUBE_ANNOTATION_CONTAINERS].split(",")
             for container in pod.spec.containers:
                 if container.name in trackedContainerName:
-                    containerInstance = dict()
-                    image = container.image
-                    containerName = container.name
-                    
-                    containerInstance["identifier"] = namespace + "-" + podName + "-" + containerName
-
-                    imageVersion = image.split(':')
-                    if imageVersion[1]:
-                        version = imageVersion[1]
-                    else:
-                        version = image
-
-                    containerInstance["version"] = version
-                    containerInstance["attributes"] = dict()
-                    containerInstance["attributes"]["namespace"] = namespace
-                    containerInstance["attributes"]["pod"] = podName
-                    containerInstance["attributes"]["node"] = nodeName
-
-                    if "asset-repository/asset.identifier" in annotations:
-                        containerInstance["asset"] = dict()
-                        containerInstance["asset"]["identifier"] = annotations["asset-repository/asset.identifier"]
-
+                    containerInstance = extractContainerInfos(container, baseIdentifier, commonAttributes, annotations)
                     instances.append(containerInstance)
+        else:
+            for container in pod.spec.containers:
+                containerInstance = extractContainerInfos(container, baseIdentifier, commonAttributes, annotations)
+                instances.append(containerInstance)
+        
     return instances
 
 while True:
     instances = kube()
-    pprint(kube())
-    time.sleep(2)
-
+    
     warnings.simplefilter('ignore',InsecureRequestWarning)
 
     headers = {
@@ -81,5 +94,12 @@ while True:
         'instances': instances,
     }
 
-    response = requests.put(os.environ["ASSET_REPOSITORY_URL"] + "/sources/" + os.environ["SOURCE_IDENTIFIER"] + "/instances", headers=headers, json=json_data, verify=False)
-    print(response.text)
+    try:
+        response = requests.put(os.environ["ASSET_REPOSITORY_URL"] + "/sources/" + os.environ["SOURCE_IDENTIFIER"] + "/instances", headers=headers, json=json_data, verify=False)
+        response.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        raise SystemExit(e)
+    except requests.exceptions.RequestException as e:  # This is the correct syntax
+        raise SystemExit(e)
+
+    time.sleep(int(os.environ["SLEEP"]))
